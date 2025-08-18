@@ -4,6 +4,22 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 
+BASIC_MOVES = ["U", "U'", "D", "D'", "F", "F',", "B", "B'", "L", "L'", "R", "R'"]
+INVERSE_MOVES = {
+    "U": "U'",
+    "U'": "U",
+    "D": "D'",
+    "D'": "D",
+    "F": "F'",
+    "F'": "F",
+    "B": "B'",
+    "B'": "B",
+    "L": "L'",
+    "L'": "L",
+    "R": "R'",
+    "R'": "R"
+}
+
 # Creating a representation of a 2x2 Rubik's Cube
 class Cube2x2:
     def __init__(self, stickers = None):
@@ -14,9 +30,13 @@ class Cube2x2:
         self.stickers = stickers or [0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5]
 
     def is_solved(self):
-        if self.stickers == [0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5]:
-            return True
-        return False
+        bool = True
+        for i in range(0,24,4):
+            for j in range(i,i+4):
+                if self.stickers[j] != self.stickers[i]:
+                    bool = False
+        return bool
+
 
     
     def print_cube(cube):
@@ -257,3 +277,26 @@ def apply_move(cube: Cube2x2, move: str) -> Cube2x2:
 
                          cube.stickers[21], cube.stickers[23], # r
                          cube.stickers[20], cube.stickers[22]]
+        
+
+def apply_algorithm(cube: Cube2x2, algorithm: List[str]) -> Cube2x2:
+    for move in algorithm:
+        apply_move(cube, move)
+    return cube
+
+def generate_scramble() -> List[str]:
+    scramble = []
+    for _ in range(random.randint(10, 15)):
+        scramble.append(random.choice(BASIC_MOVES))
+    return scramble
+
+def oneHot_encode(cube: Cube2x2) -> torch.Tensor:
+    tensor = torch.zeros((24, 6), dtype=torch.float32)
+    for i, sticker in enumerate(cube.stickers):
+        tensor[i, sticker] = 1.0
+    return tensor.flatten()  # Flatten to a 144-dimensional vector
+
+myCube = Cube2x2()
+apply_algorithm(myCube, generate_scramble())
+print(myCube.stickers[:3])
+print(oneHot_encode(myCube)[:18])
