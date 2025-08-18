@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 
-BASIC_MOVES = ["U", "U'", "D", "D'", "F", "F',", "B", "B'", "L", "L'", "R", "R'"]
+BASIC_MOVES = ["U", "U'", "D", "D'", "F", "F'", "B", "B'", "L", "L'", "R", "R'"]
 INVERSE_MOVES = {
     "U": "U'",
     "U'": "U",
@@ -38,7 +38,7 @@ class Cube2x2:
         return bool
 
 
-    
+    #Print cube to debug
     def print_cube(cube):
 
         print("       ", str(cube.stickers[0]).rjust(2), str(cube.stickers[1]).rjust(2))
@@ -296,7 +296,25 @@ def oneHot_encode(cube: Cube2x2) -> torch.Tensor:
         tensor[i, sticker] = 1.0
     return tensor.flatten()  # Flatten to a 144-dimensional vector
 
-myCube = Cube2x2()
-apply_algorithm(myCube, generate_scramble())
-print(myCube.stickers[:3])
-print(oneHot_encode(myCube)[:18])
+class CubeDataSet(Dataset):
+    def __init__(self, num_samples: int):
+        self.data = []
+        self.labels = []
+        self.move_to_index = {m:i for i,m in enumerate(BASIC_MOVES)}
+        for _ in range(num_samples):
+            cube = Cube2x2()
+            scramble = generate_scramble()
+            apply_algorithm(cube, scramble)
+            for move in reversed(scramble):
+                self.data.append(oneHot_encode(cube))
+                self.labels.append(self.move_to_index[INVERSE_MOVES[move]])
+                apply_move(cube, move)
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        return self.data[idx], self.labels[idx]
+    
+data = CubeDataSet(1)  # Example dataset with 1 samples
+print(data.__getitem__(1))
