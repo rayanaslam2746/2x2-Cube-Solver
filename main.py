@@ -4,6 +4,13 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 
+SEED = 42
+
+random.seed(SEED)              # Python random
+torch.manual_seed(SEED)        # PyTorch CPU
+torch.cuda.manual_seed(SEED)   # PyTorch GPU
+torch.cuda.manual_seed_all(SEED)
+
 BASIC_MOVES = ['U', 'U\'', 'D', 'D\'', 'F', 'F\'', 'B', 'B\'', 'L', 'L\'', 'R', 'R\'']
 INVERSE_MOVES = {
     'U': 'U\'',
@@ -323,18 +330,16 @@ class NeuralNetwork(nn.Module):
         super(NeuralNetwork, self).__init__()
         self.flatten = nn.Flatten()
         self.linear_relu_stack = nn.Sequential(
-            nn.Linear(144, 512),
+            nn.Linear(144, 128),
             nn.ReLU(),
             nn.Dropout(0.3),
 
-            nn.Linear(512, 256),
+            nn.Linear(128, 64),
             nn.ReLU(),
             nn.Dropout(0.3),
 
-            nn.Linear(256, 128),
-            nn.ReLU(),
+            nn.Linear(64, 12),
 
-            nn.Linear(128, 12)
         )
 
     def forward(self, x):
@@ -393,6 +398,6 @@ def train_model(model: nn.Module, dataset: CubeDataSet, epochs: int = 20, batch_
 
 if __name__ == "__main__":
     model = NeuralNetwork()
-    trained_model = train_model(model, CubeDataSet, epochs=20, batch_size=32, n_samples=50000)
+    trained_model = train_model(model, CubeDataSet, epochs=20, batch_size=32, n_samples=50)
 
 torch.save(trained_model.state_dict(), "2x2_solver.pth")
