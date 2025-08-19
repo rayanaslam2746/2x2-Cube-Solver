@@ -4,20 +4,20 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 
-BASIC_MOVES = ["U", "U'", "D", "D'", "F", "F'", "B", "B'", "L", "L'", "R", "R'"]
+BASIC_MOVES = ['U', 'U\'', 'D', 'D\'', 'F', 'F\'', 'B', 'B\'', 'L', 'L\'', 'R', 'R\'']
 INVERSE_MOVES = {
-    "U": "U'",
-    "U'": "U",
-    "D": "D'",
-    "D'": "D",
-    "F": "F'",
-    "F'": "F",
-    "B": "B'",
-    "B'": "B",
-    "L": "L'",
-    "L'": "L",
-    "R": "R'",
-    "R'": "R"
+    'U': 'U\'',
+    'U\'' : 'U',
+    'D': 'D\'',
+    'D\'': 'D',
+    'F': 'F\'',
+    'F\'': 'F',
+    'B': 'B\'',
+    'B\'': 'B',
+    'L': 'L\'',
+    'L\'': 'L',
+    'R': 'R\'',
+    'R\'': 'R'
 }
 
 # Creating a representation of a 2x2 Rubik's Cube
@@ -297,24 +297,102 @@ def oneHot_encode(cube: Cube2x2) -> torch.Tensor:
     return tensor.flatten()  # Flatten to a 144-dimensional vector
 
 class CubeDataSet(Dataset):
-    def __init__(self, num_samples: int):
+    def __init__(self, n_samples: int):
         self.data = []
         self.labels = []
         self.move_to_index = {m:i for i,m in enumerate(BASIC_MOVES)}
-        for _ in range(num_samples):
+        for _ in range(n_samples):
             cube = Cube2x2()
             scramble = generate_scramble()
             apply_algorithm(cube, scramble)
             for move in reversed(scramble):
                 self.data.append(oneHot_encode(cube))
                 self.labels.append(self.move_to_index[INVERSE_MOVES[move]])
-                apply_move(cube, move)
+                apply_move(cube, INVERSE_MOVES[move])
     
     def __len__(self):
         return len(self.data)
     
-    def __getitem__(self, idx):
+    def __getitem__(self, idx):  # <-- FIX
         return self.data[idx], self.labels[idx]
     
-data = CubeDataSet(1)  # Example dataset with 1 samples
-print(data.__getitem__(1))
+
+
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super(NeuralNetwork, self).__init__()
+        self.flatten = nn.Flatten()
+        self.linear_relu_stack = nn.Sequential(
+            nn.Linear(144, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+
+            nn.Linear(256, 128),
+            nn.ReLU(),
+
+            nn.Linear(128, 12)
+        )
+
+    def forward(self, x):
+        x = self.flatten(x)
+        logits = self.linear_relu_stack(x)
+        return logits
+    
+def train_model(model: nn.Module, dataset: CubeDataSet, epochs: int = 20, batch_size: int = 32, lr=1e-3, n_samples=50000, device=None):
+    device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+    ds = CubeDataSet(n_samples)
+    n_train = int(0.9 * len(ds))
+    n_val = len(ds) - n_train
+    train_ds, val_ds = torch.utils.data.random_split(ds, [n_train, n_val])
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False) 
+
+    model = NeuralNetwork().to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.CrossEntropyLoss()
+
+    for ep in range(1, epochs + 1):
+        model.train()
+        total = 0; correct = 0; loss_sum = 0.0
+        for xb, yb in train_loader:
+            xb = xb.to(device)
+            yb = torch.as_tensor(yb, dtype=torch.long, device=device)
+            opt.zero_grad()
+            logits = model(xb)
+            loss = criterion(logits, yb)
+            loss.backward()
+            opt.step()
+            loss_sum += loss.item() * xb.size(0)
+            pred = logits.argmax(dim=1)
+            correct += (pred == yb).sum().item()
+            total += xb.size(0)
+        train_acc = correct / total
+        train_loss = loss_sum / total
+
+        # validation
+        model.eval(); vtotal = 0; vcorrect = 0; vloss = 0.0
+        with torch.no_grad():
+            for xb, yb in val_loader:
+                xb = xb.to(device)
+                yb = torch.as_tensor(yb, dtype=torch.long, device=device)
+                logits = model(xb)
+                loss = criterion(logits, yb)
+                vloss += loss.item() * xb.size(0)
+                pred = logits.argmax(dim=1)
+                vcorrect += (pred == yb).sum().item()
+                vtotal += xb.size(0)
+        val_acc = vcorrect / vtotal
+        val_loss = vloss / vtotal
+        print(f"Epoch {ep:02d} | train_loss={train_loss:.4f} acc={train_acc:.3f} | val_loss={val_loss:.4f} acc={val_acc:.3f}")
+
+    return model
+
+if __name__ == "__main__":
+    model = NeuralNetwork()
+    trained_model = train_model(model, CubeDataSet, epochs=20, batch_size=32, n_samples=50000)
+
+torch.save(trained_model.state_dict(), "2x2_solver.pth")
