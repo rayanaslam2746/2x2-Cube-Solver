@@ -3,13 +3,12 @@ from typing import List
 import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
+from datetime import datetime
+from copy import copy
+import torch.nn.functional as F
 
-SEED = 42
+length = 0
 
-random.seed(SEED)              # Python random
-torch.manual_seed(SEED)        # PyTorch CPU
-torch.cuda.manual_seed(SEED)   # PyTorch GPU
-torch.cuda.manual_seed_all(SEED)
 
 BASIC_MOVES = ['U', 'U\'', 'D', 'D\'', 'F', 'F\'', 'B', 'B\'', 'L', 'L\'', 'R', 'R\'']
 INVERSE_MOVES = {
@@ -26,6 +25,7 @@ INVERSE_MOVES = {
     'R': 'R\'',
     'R\'': 'R'
 }
+
 
 # Creating a representation of a 2x2 Rubik's Cube
 class Cube2x2:
@@ -62,9 +62,8 @@ class Cube2x2:
               str(cube.stickers[14]).rjust(2), str(cube.stickers[15]).rjust(2))
 
         print("       ", str(cube.stickers[4]).rjust(2), str(cube.stickers[5]).rjust(2))
-        print("       ", str(cube.stickers[6]).rjust(2), str(cube.stickers[7]).rjust(2))
+        print("       ", str(cube.stickers[6]).rjust(2), str(cube.stickers[7]).rjust(2))    
     
-
 def apply_move(cube: Cube2x2, move: str) -> Cube2x2:
     # Define the effect of each move on the cube's stickers
     # turning a 2x2 essentially rotates half of the 3d cube, affecting all faces but the 1 opposite face
@@ -284,24 +283,32 @@ def apply_move(cube: Cube2x2, move: str) -> Cube2x2:
 
                          cube.stickers[21], cube.stickers[23], # r
                          cube.stickers[20], cube.stickers[22]]
-        
-
+    
 def apply_algorithm(cube: Cube2x2, algorithm: List[str]) -> Cube2x2:
     for move in algorithm:
         apply_move(cube, move)
     return cube
 
-def generate_scramble() -> List[str]:
+def generate_scramble(scrambleLength = None) -> List[str]:
     scramble = []
-    for _ in range(random.randint(10, 15)):
+    length = random.randint(5,11) if scrambleLength is None else scrambleLength
+    for _ in range(length):
         scramble.append(random.choice(BASIC_MOVES))
     return scramble
 
 def oneHot_encode(cube: Cube2x2) -> torch.Tensor:
-    tensor = torch.zeros((24, 6), dtype=torch.float32)
+    # Create (6, 2, 2) one-hot tensor for CNN input
+    tensor = torch.zeros((6, 2, 2), dtype=torch.float32)
     for i, sticker in enumerate(cube.stickers):
-        tensor[i, sticker] = 1.0
-    return tensor.flatten()  # Flatten to a 144-dimensional vector
+        face = i // 4              # 0..5
+        pos = i % 4                # 0..3
+        row = pos // 2              # 0 or 1
+        col = pos % 2               # 0 or 1
+        tensor[face, row, col] = sticker / 5.0  # normalize 0..5 to 0..1
+    return tensor
+
+def copy(self):
+    return Cube2x2(self.stickers.copy())
 
 class CubeDataSet(Dataset):
     def __init__(self, n_samples: int):
@@ -313,59 +320,79 @@ class CubeDataSet(Dataset):
             scramble = generate_scramble()
             apply_algorithm(cube, scramble)
             for move in reversed(scramble):
-                self.data.append(oneHot_encode(cube))
+                self.data.append(oneHot_encode(cube).view(6,2,2))  # <-- keep as 6x2x2
                 self.labels.append(self.move_to_index[INVERSE_MOVES[move]])
                 apply_move(cube, INVERSE_MOVES[move])
     
     def __len__(self):
         return len(self.data)
     
-    def __getitem__(self, idx):  # <-- FIX
-        return self.data[idx], self.labels[idx]
+    def __getitem__(self, idx):
+        return self.data[idx], torch.tensor(self.labels[idx], dtype=torch.long)
     
 
 
-class NeuralNetwork(nn.Module):
-    def __init__(self):
-        super(NeuralNetwork, self).__init__()
-        self.flatten = nn.Flatten()
-        self.linear_relu_stack = nn.Sequential(
-            nn.Linear(144, 128),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-
-            nn.Linear(64, 12),
-
-        )
+class ResidualBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=1)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=1)
 
     def forward(self, x):
-        x = self.flatten(x)
-        logits = self.linear_relu_stack(x)
+        identity = x
+        out = F.relu(self.conv1(x))
+        out = self.conv2(out)
+        out += identity   # residual connection
+        out = F.relu(out)
+        return out
+
+# CNN for 2x2 Cube
+class NeuralNetwork(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # Input: 6 channels (faces), 2x2 stickers per face
+        self.conv1 = nn.Conv2d(6, 32, kernel_size=2)  # output: (batch, 32, 1, 1)
+        self.resblock1 = ResidualBlock(32)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=1)  # combine features across channels
+        self.resblock2 = ResidualBlock(64)
+        
+        self.fc1 = nn.Linear(64, 64)
+        self.dropout = nn.Dropout(0.3)
+        self.fc2 = nn.Linear(64, 12)  # 12 possible moves
+
+    def forward(self, x):
+        # x: (batch, 24*6) flattened one-hot vector
+        x = x.view(-1, 6, 2, 2)       # reshape to 6 channels, 2x2
+        x = F.relu(self.conv1(x))
+        x = self.resblock1(x)
+        x = F.relu(self.conv2(x))
+        x = self.resblock2(x)
+        x = x.view(x.size(0), -1)     # flatten
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        logits = self.fc2(x)
         return logits
     
 def train_model(model: nn.Module, dataset: CubeDataSet, epochs: int = 20, batch_size: int = 32, lr=1e-3, n_samples=50000, device=None):
     device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
-    ds = CubeDataSet(n_samples)
-    n_train = int(0.9 * len(ds))
-    n_val = len(ds) - n_train
-    train_ds, val_ds = torch.utils.data.random_split(ds, [n_train, n_val])
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False) 
-
-    model = NeuralNetwork().to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    model = model.to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)  # added small weight decay
     criterion = nn.CrossEntropyLoss()
 
     for ep in range(1, epochs + 1):
+        ds = CubeDataSet(n_samples)
+        n_train = int(0.9 * len(ds))
+        n_val = len(ds) - n_train
+        train_ds, val_ds = torch.utils.data.random_split(ds, [n_train, n_val])
+
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
+        
         model.train()
         total = 0; correct = 0; loss_sum = 0.0
         for xb, yb in train_loader:
-            xb = xb.to(device)
-            yb = torch.as_tensor(yb, dtype=torch.long, device=device)
+            xb = xb.to(device)              # now xb is (batch, 144)
+            yb = yb.to(device, dtype=torch.long)
             opt.zero_grad()
             logits = model(xb)
             loss = criterion(logits, yb)
@@ -392,12 +419,88 @@ def train_model(model: nn.Module, dataset: CubeDataSet, epochs: int = 20, batch_
                 vtotal += xb.size(0)
         val_acc = vcorrect / vtotal
         val_loss = vloss / vtotal
-        print(f"Epoch {ep:02d} | train_loss={train_loss:.4f} acc={train_acc:.3f} | val_loss={val_loss:.4f} acc={val_acc:.3f}")
+        print(f"Epoch {ep:02d} | train_loss={train_loss:.4f} acc={train_acc:.3f} | val_loss={val_loss:.4f} acc={val_acc:.3f} time={datetime.now().time()}")
 
     return model
 
-if __name__ == "__main__":
-    model = NeuralNetwork()
-    trained_model = train_model(model, CubeDataSet, epochs=20, batch_size=32, n_samples=50)
+def trainTheModel(epochs, n_samples, batch_size):
+    
+    from pathlib import Path
 
-torch.save(trained_model.state_dict(), "2x2_solver.pth")
+    MODEL_PATH = Path("models")
+    MODEL_PATH.mkdir(parents=True, exist_ok=True)
+
+    MODEL_NAME = "2x2_solver_cnn.pth"
+    MODEL_SAVE_PATH = MODEL_PATH / MODEL_NAME
+
+    # Initialize and train the model
+    model = NeuralNetwork()
+    model.load_state_dict(torch.load(f=MODEL_SAVE_PATH))  # Load existing model if available
+    trained_model = train_model(model, CubeDataSet, epochs=epochs, batch_size=batch_size, n_samples=n_samples)
+
+    torch.save(obj=model.state_dict(), f=MODEL_SAVE_PATH)
+
+def bestMove(cube: Cube2x2) -> str:
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = NeuralNetwork().to(device)
+    model.load_state_dict(torch.load("models/2x2_solver_cnn.pth", map_location=device))
+    model.eval()
+    state_tensor = oneHot_encode(cube).unsqueeze(0).to(device)
+    move_idx = model(state_tensor).argmax(dim=1).item()
+    move = BASIC_MOVES[move_idx]
+    return move
+
+
+def solveCube(cube: Cube2x2, max_moves=100) -> List[str]:
+    moves = []
+    cube_clone = copy(cube)
+    seen_states = set()
+    
+    while not cube_clone.is_solved() and len(moves) < max_moves:
+        state_hash = tuple(cube_clone.stickers)
+        if state_hash in seen_states or (moves and bestMove(cube_clone) == INVERSE_MOVES[moves[-1]]):
+            move = random.choice(BASIC_MOVES)
+        else:
+            move = bestMove(cube_clone)
+        seen_states.add(state_hash)
+        moves.append(move)
+        print(moves)
+        apply_move(cube_clone, move)
+    return moves
+
+def demoSolve(cube, scrambleLength = None):
+    print("scramble length =", scrambleLength)
+    apply_algorithm(cube, generate_scramble(scrambleLength = scrambleLength))
+    Cube2x2.print_cube(cube)
+    print("\nSolving the cube...\n")
+    solve = solveCube(cube)
+    print(solve)
+    apply_algorithm(cube, solve)
+    print("\n")
+    Cube2x2.print_cube(cube)
+
+
+
+def bareSolve(cube, scrambleLength=None):
+    global length
+    apply_algorithm(cube, generate_scramble(scrambleLength=scrambleLength))
+    solve = solveCube(cube)
+    apply_algorithm(cube, solve)
+    length = len(solve)
+    return cube.is_solved()
+
+def solveSuccessRate(attempts, scrambleLength=10):
+    successes = 0
+    totLength = 0
+    for i in range(attempts):
+        cube = Cube2x2()
+        isSolved = bareSolve(cube, scrambleLength=scrambleLength)
+        if isSolved:
+            successes += 1
+            totLength += length
+    avg_length = totLength / successes if successes > 0 else 0
+    print(f"Success rate: {successes}/{attempts} = {successes/attempts:.2%}",
+          f"Average length: {avg_length:.2f} moves per solve")
+
+solveSuccessRate(100, scrambleLength=7)
+
