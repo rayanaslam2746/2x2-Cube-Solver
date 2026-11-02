@@ -131,16 +131,17 @@ python -m cube_solver.train \
 
 On Windows PowerShell, put it on one line or replace each `\` with a backtick.
 
-Output (on a GPU; times vary by machine):
+What it prints:
+1. **The setup:** the parameter count, the device (`cuda` or `cpu`) and
+   where the log is being written.
+2. **Progress:** one line every `--eval-every` steps, showing the step, scramble
+   depth, loss, label accuracy, validation optimal-move rate, value MAE and
+   elapsed time.
+3. **The result:** the best validation optimal-move rate and where the
+   checkpoint was saved.
 
-```
-2,262,023 parameters on cuda; logging to models\demo.csv
-step    250 | depth 20 | loss 1.6391 | label acc 0.413 | val optimal 0.738 | value MAE 2.74 | 4s
-step    500 | depth 20 | loss 1.5677 | label acc 0.420 | val optimal 0.774 | value MAE 2.76 | 7s
-step    750 | depth 20 | loss 1.5391 | label acc 0.446 | val optimal 0.791 | value MAE 2.71 | 10s
-step   1000 | depth 20 | loss 1.5088 | label acc 0.435 | val optimal 0.805 | value MAE 2.55 | 13s
-best validation optimal-move rate 0.805, saved to models\demo.pt
-```
+This 1,000-step run takes about 15 seconds on a GPU and reaches a validation
+optimal-move rate of about 0.80.
 
 ### Reading the training output
 
@@ -236,84 +237,18 @@ models can be compared directly.
 python -m cube_solver.evaluate --model models/policy.pt --split test --per-distance 20 --methods greedy beam:256 astar:0.8 --seed 0
 ```
 
-Output:
+What it prints:
+1. **A policy table** covering every state in the split. It shows how good
+   the network's move choices are.
+2. **One search table per method,** covering the `--per-distance` subsample.
+   It shows how well each search solves cubes.
+3. **A summary line** under each search table.
 
-```
-Policy on 1177 test states
-dist     n         top1        top2        top3      random value_error
-   1     3        1.000       1.000       1.000       0.167       0.185
-   2    14        1.000       1.000       1.000       0.190       0.069
-   3    60        1.000       1.000       1.000       0.183       0.070
-   4   100        1.000       1.000       1.000       0.178       0.129
-   5   100        1.000       1.000       1.000       0.192       0.328
-   6   100        0.990       1.000       1.000       0.195       1.100
-   7   100        0.760       0.900       0.960       0.222       3.623
-   8   100        0.570       0.720       0.900       0.222       4.855
-   9   100        0.500       0.680       0.790       0.233       4.669
-  10   100        0.480       0.640       0.770       0.293       4.269
-  11   100        0.540       0.750       0.880       0.512       3.618
-  12   100        0.910       1.000       1.000       0.863       2.874
-  13   100        1.000       1.000       1.000       0.998       2.003
-  14   100        1.000       1.000       1.000       1.000       1.063
-all   1177        0.809       0.889       0.941       0.429       2.429
+Each table has one row per true distance plus an `all` row.
 
-Search: greedy 
-dist     n       solved     optimal         gap       nodes          ms
-   1     3        1.000       1.000       0.000       1.000      13.262
-   2    14        1.000       1.000       0.000       2.000       4.105
-   3    20        1.000       1.000       0.000       3.000       9.227
-   4    20        1.000       1.000       0.000       4.000       9.245
-   5    20        1.000       1.000       0.000       5.000      12.421
-   6    20        1.000       0.950       0.200       6.200      17.782
-   7    20        0.950       0.750       0.737       8.850      21.582
-   8    20        0.800       0.400       5.625      16.900      44.380
-   9    20        0.700       0.250       3.000      17.400      46.755
-  10    20        0.750       0.050       8.000      21.000      55.128
-  11    20        0.500       0.100       7.800      24.400      59.360
-  12    20        0.550       0.000       7.455      24.200      66.154
-  13    20        0.450       0.000       9.333      26.550      72.778
-  14    20        0.600       0.050       8.333      25.400      66.536
-all    257        0.790       0.498       3.025      14.354      37.838
-solve rate 79.0% (95% CI 73.6% to 83.5%), optimal 49.8%, mean extra moves 3.02, 38 ms per solve
-
-Search: beam {'width': 256}
-dist     n       solved     optimal         gap       nodes          ms
-   1     3        1.000       1.000       0.000       1.000       3.849
-   2    14        1.000       1.000       0.000       7.000       6.357
-   3    20        1.000       1.000       0.000      34.000      11.673
-   4    20        1.000       1.000       0.000     154.000      12.885
-   5    20        1.000       1.000       0.000     410.000      18.481
-   6    20        1.000       1.000       0.000     666.000      23.571
-   7    20        1.000       1.000       0.000     922.000      27.475
-   8    20        1.000       1.000       0.000    1178.000      33.870
-   9    20        1.000       1.000       0.000    1434.000      43.583
-  10    20        1.000       0.950       0.100    1715.600      46.564
-  11    20        1.000       0.900       0.200    1997.200      48.424
-  12    20        1.000       1.000       0.000    2202.000      55.732
-  13    20        1.000       1.000       0.000    2458.000      56.975
-  14    20        1.000       1.000       0.000    2714.000      62.755
-all    257        1.000       0.988       0.023    1236.564      34.787
-solve rate 100.0% (95% CI 98.5% to 100.0%), optimal 98.8%, mean extra moves 0.02, 35 ms per solve
-
-Search: astar {'weight': 0.8}
-dist     n       solved     optimal         gap       nodes          ms
-   1     3        1.000       1.000       0.000       1.000       3.007
-   2    14        1.000       1.000       0.000       7.000       5.468
-   3    20        1.000       1.000       0.000      34.000       7.537
-   4    20        1.000       1.000       0.000      98.000      11.143
-   5    20        1.000       1.000       0.000     162.000      20.933
-   6    20        1.000       1.000       0.000     226.000      20.421
-   7    20        1.000       1.000       0.000     290.000      27.029
-   8    20        1.000       1.000       0.000     354.000      38.132
-   9    20        1.000       1.000       0.000     418.000      43.696
-  10    20        1.000       0.900       0.200     494.800      50.659
-  11    20        1.000       1.000       0.000     546.000      55.765
-  12    20        1.000       1.000       0.000     610.000      58.352
-  13    20        1.000       1.000       0.000     674.000      70.003
-  14    20        1.000       0.950       0.100     744.400      72.191
-all    257        1.000       0.988       0.023     362.354      37.365
-solve rate 100.0% (95% CI 98.5% to 100.0%), optimal 98.8%, mean extra moves 0.02, 37 ms per solve
-```
+With the included `models/policy.pt`, `beam:256` and `astar:0.8` solve 100%
+of test cubes, about 99% of them optimally, in roughly 35 ms each. `greedy`
+solves about 79%.
 
 ### Reading the evaluation output
 
@@ -384,20 +319,13 @@ print(f"solved={result.solved} moves={len(result.moves)} nodes={result.nodes} ti
 print("check:", cube.copy().apply_algorithm(result.moves).is_solved())
 ```
 
-Output:
-
-```
-Scramble: U' F D' F' R D F U F D' R F R' F' U' F B D' F R' B' L' D D B'
-         1  0
-         0  3
- 5  4    2  1    4  3    4  3
- 1  0    3  5    2  1    4  5
-         5  0
-         2  2
-Solution: L B L' D L' L' B' L' D'
-solved=True moves=9 nodes=1434 time=0.24s
-check: True
-```
+What it prints:
+1. **The scramble.**
+2. **The scrambled cube** as an unfolded net of color numbers.
+3. **The solution moves.**
+4. **Search stats:** whether it solved the cube, the move count, states
+   evaluated and time taken.
+5. **`check: True`,** confirming that the solution really solves the cube.
 
 The first solve is slower because PyTorch is warming up.
 
