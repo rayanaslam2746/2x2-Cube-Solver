@@ -1,0 +1,7 @@
+__pycache__/
+.pytest_cache/
+
+# Regenerated automatically on first run
+models/distances_*.npy
+models/heldout_*.npz
+models/*.csv
